@@ -1,0 +1,121 @@
+name: easy-elk-v9-single-node
+
+services:
+  es01:
+    image: docker.elastic.co/elasticsearch/elasticsearch:${STACK_VERSION:?Set STACK_VERSION in .env}
+    environment:
+      - node.name=es01
+      - cluster.name=${CLUSTER_NAME:-easy-elk-lab}
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD:?Set ELASTIC_PASSWORD in .env}
+      - xpack.security.enabled=true
+      # Lab only: plain HTTP to keep things simple. Do not do this in production.
+      - xpack.security.http.ssl.enabled=false
+      - xpack.security.transport.ssl.enabled=false
+      - xpack.license.self_generated.type=${LICENSE:-basic}
+      - ES_JAVA_OPTS=-Xms${ES_HEAP:-2g} -Xmx${ES_HEAP:-2g}
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    mem_limit: ${ES_MEM_LIMIT:-4g}
+    volumes:
+      - esdata01:/usr/share/elasticsearch/data
+    ports:
+      - ${ES_PORT:-9200}:9200
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - curl -fs -u "elastic:$${ELASTIC_PASSWORD}" "http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=1s" >/dev/null
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  # One-shot job: sets the password of the built-in kibana_system user.
+  setup:
+    image: docker.elastic.co/elasticsearch/elasticsearch:${STACK_VERSION}
+    depends_on:
+      es01:
+        condition: service_healthy
+    environment:
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
+      - KIBANA_PASSWORD=${KIBANA_PASSWORD:?Set KIBANA_PASSWORD in .env}
+    command:
+      - bash
+      - -c
+      - |
+        echo "Setting kibana_system password..."
+        until curl -fs -o /dev/null -X POST -u "elastic:$${ELASTIC_PASSWORD}" \
+          -H "Content-Type: application/json" \
+          http://es01:9200/_security/user/kibana_system/_password \
+          -d "{\"password\":\"$${KIBANA_PASSWORD}\"}"; do
+          sleep 2
+        done
+        echo "Done."
+    restart: "no"
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:${STACK_VERSION}
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+    environment:
+      - SERVERNAME=kibana
+      - ELASTICSEARCH_HOSTS=http://es01:9200
+      - ELASTICSEARCH_USERNAME=kibana_system
+      - ELASTICSEARCH_PASSWORD=${KIBANA_PASSWORD}
+      - XPACK_SECURITY_ENCRYPTIONKEY=${KIBANA_ENCRYPTION_KEY:?Set KIBANA_ENCRYPTION_KEY in .env}
+      - XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY=${KIBANA_ENCRYPTION_KEY}
+      - XPACK_REPORTING_ENCRYPTIONKEY=${KIBANA_ENCRYPTION_KEY}
+      - NODE_OPTIONS=--max-old-space-size=${KIBANA_HEAP_MB:-1024}
+    mem_limit: ${KIBANA_MEM_LIMIT:-2g}
+    volumes:
+      - kibanadata:/usr/share/kibana/data
+    ports:
+      - ${KIBANA_PORT:-5601}:5601
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - curl -s -I http://localhost:5601 | grep -q "HTTP/1.1 302 Found"
+      interval: 10s
+      timeout: 5s
+      retries: 60
+      start_period: 30s
+
+  # Live test data generator. Not started with the lab: `./lab.sh data load` loads the
+  # history (with progress bars), then starts this service, which only follows the
+  # datasets that already have data.
+  datagen:
+    image: python:3.14.8-slim-trixie
+    profiles: [datagen]
+    depends_on:
+      es01:
+        condition: service_healthy
+      kibana:
+        condition: service_healthy
+    environment:
+      - ES_URL=http://es01:9200
+      - ES_USER=elastic
+      - ES_PASSWORD=${ELASTIC_PASSWORD}
+      - KIBANA_URL=http://kibana:5601
+      - DATAGEN_DATASETS=${DATAGEN_DATASETS:-apache,firewall,metrics,postgresql}
+      - DATAGEN_HISTORY_DAYS=${DATAGEN_HISTORY_DAYS:-7}
+      - DATAGEN_RATE=${DATAGEN_RATE:-0.1}
+      - DATAGEN_SEED=${DATAGEN_SEED:-easy-elk-lab}
+      - DATAGEN_UTC_OFFSET=${DATAGEN_UTC_OFFSET:-1}
+      - DATAGEN_METRICS_INTERVAL=${DATAGEN_METRICS_INTERVAL:-60}
+      - PYTHONDONTWRITEBYTECODE=1
+    volumes:
+      - ../../datagen:/app:ro
+    command: [python, -u, /app/datagen.py, run, --existing-only]
+    mem_limit: 256m
+    restart: on-failure
+
+volumes:
+  esdata01:
+  kibanadata:

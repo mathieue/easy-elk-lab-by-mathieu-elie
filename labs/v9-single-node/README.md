@@ -1,0 +1,121 @@
+# Lab: Elastic Stack 9 — single node
+
+One Elasticsearch node and one Kibana, Elastic Stack 9.5.5, with test data loaded on
+demand (web server, firewall and database logs, host metrics: 7 days of history, then
+live).
+
+> **Lab environment only.** Security is enabled (users and passwords), but HTTP is
+> not encrypted. Do not use this setup in production.
+
+## Prerequisites
+
+- Linux machine with Docker and the `docker compose` plugin, and your user allowed to
+  run `docker` commands
+- About 6 GB of free RAM (Elasticsearch: 2 GB heap, Kibana: 1 GB heap)
+- `vm.max_map_count` set to at least 262144:
+
+  ```bash
+  sudo sysctl -w vm.max_map_count=262144
+  ```
+
+`./lab.sh check` verifies all of this for you.
+
+## Quick start
+
+```bash
+cd labs/v9-single-node
+./lab.sh start        # Elasticsearch + Kibana
+./lab.sh data load    # test data, with a progress bar per dataset
+```
+
+The first start creates a `.env` file with random passwords, checks the prerequisites,
+then starts the lab. Kibana can take a couple of minutes. At the end, the script prints
+the URLs and the password of the `elastic` user. Show them again at any time with:
+
+```bash
+./lab.sh info
+```
+
+## Test data
+
+Test data is not loaded when the lab starts: load it when you need it.
+
+```bash
+./lab.sh data load
+```
+
+```
+Loading test data (7 days: apache,firewall,metrics,postgresql)
+  From 2026-10-05 15:02 UTC to now
+
+  apache      [███████████████░░░░░░░░░░░░░░░]  52%      35120 docs
+  firewall    [██████████████░░░░░░░░░░░░░░░░]  49%      33870 docs
+  metrics     [███████████████░░░░░░░░░░░░░░░]  51%     108040 docs
+  postgresql  [███████████████░░░░░░░░░░░░░░░]  52%      36200 docs
+```
+
+All datasets load at the same time (about a minute for 7 days). Then new data keeps
+being generated in real time, and it restarts with the lab (`./lab.sh start`
+catches up on the time the lab was stopped).
+
+- Interrupted with Ctrl-C? Run `./lab.sh data load` again: it resumes where it stopped.
+- More history, or only some datasets:
+  `./lab.sh data load --days 30`, `./lab.sh data load --datasets apache,metrics`.
+
+The datasets:
+
+- Apache web server logs: data view **Web logs (Apache)**
+- Firewall logs: data view **Firewall logs**
+- PostgreSQL database logs: data view **Database logs**
+- Server metrics (CPU, memory, disk, network): data view **Host metrics**, and
+  **Observability > Infrastructure** in Kibana
+
+In Kibana, open **Discover** and select one of these data views.
+
+```bash
+./lab.sh data status     # what has been generated
+./lab.sh data logs       # follow the live generator
+./lab.sh data stop       # stop live generation (data is kept)
+```
+
+What the data contains, and all generator settings:
+[datagen/README.md](../../datagen/README.md).
+
+## Commands
+
+| Command                            | What it does                                          |
+|------------------------------------|-------------------------------------------------------|
+| `./lab.sh start`                   | Create `.env` if needed, check, start the lab (and live data, if loaded) |
+| `./lab.sh data load [--days N] [--datasets a,b]` | Load test data with progress bars, then go live |
+| `./lab.sh stop`                    | Stop the lab (data is kept)                           |
+| `./lab.sh restart`                 | Stop then start                                       |
+| `./lab.sh status`                  | Show containers and cluster health                    |
+| `./lab.sh info`                    | Show URLs and credentials                             |
+| `./lab.sh logs [es01\|kibana]`     | Follow logs                                           |
+| `./lab.sh es <METHOD> <path> [body]` | Send an authenticated request to Elasticsearch      |
+| `./lab.sh data [status\|start\|stop\|logs\|backfill\|reset]` | Manage test data (see `./lab.sh help`) |
+| `./lab.sh check`                   | Check prerequisites only                              |
+| `./lab.sh destroy`                 | Remove the lab and **all its data** (asks to confirm) |
+
+Examples of requests:
+
+```bash
+./lab.sh es GET /
+./lab.sh es GET '/_cat/indices?v'
+./lab.sh es PUT /my-index '{"settings":{"number_of_replicas":0}}'
+```
+
+## Configuration
+
+Settings live in `.env` (created from `.env.example`): stack version, ports, memory,
+passwords, test data. After changing it, run `./lab.sh restart`.
+
+Test data settings in `.env` (`DATAGEN_*`) are the defaults of `./lab.sh data load`.
+
+## Troubleshooting
+
+- **Kibana says a field was not found** (for example `system.cpu.total.norm.pct` in
+  Observability > Infrastructure) right after the first start: reload the page
+  (Ctrl+Shift+R). Your browser kept the list of fields from before the data existed.
+
+Changing the passwords only works on a fresh lab: run `./lab.sh destroy` first.
