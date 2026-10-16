@@ -149,6 +149,17 @@ services:
       retries: 30
       start_period: 30s
 
+  # Bare Linux server where participants install Elastic Agent by hand:
+  # `./lab.sh agent shell web-01`, then paste the commands from Kibana > Fleet > Add agent.
+  web-01:
+    image: easy-elk-lab/agent-host:local
+    build: ./agent-host
+    profiles: [agents]
+    hostname: web-01
+    # tini as PID 1: reaps stopped agent processes, so `elastic-agent uninstall` works.
+    init: true
+    mem_limit: ${AGENT_MEM_LIMIT:-1g}
+
 volumes:
   esdata01:
   kibanadata:

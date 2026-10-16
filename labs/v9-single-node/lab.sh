@@ -7,6 +7,8 @@ cd "$LAB_DIR"
 
 MIN_MAP_COUNT=262144
 MIN_FREE_MEM_MB=6144
+# Bare servers for Elastic Agent labs (Compose services of the "agents" profile)
+AGENT_HOSTS="web-01"
 
 # ---------------------------------------------------------------- output
 
@@ -72,6 +74,10 @@ kibana_url() { echo "http://localhost:${KIBANA_PORT:-5601}"; }
 
 fleet_created() {
   [ -n "$(compose --profile fleet ps -aq fleet-server 2>/dev/null)" ]
+}
+
+agent_host_created() {
+  [ -n "$(compose --profile agents ps -aq "$1" 2>/dev/null)" ]
 }
 
 # ---------------------------------------------------------------- commands
@@ -185,6 +191,13 @@ cmd_start() {
     compose --profile fleet up -d fleet-server >/dev/null 2>&1
     ok "Fleet Server restarted."
   fi
+  local host
+  for host in $AGENT_HOSTS; do
+    if agent_host_created "$host"; then
+      compose --profile agents up -d "$host" >/dev/null 2>&1
+      ok "Server $host restarted."
+    fi
+  done
   if has_test_data; then
     compose --profile datagen up -d datagen >/dev/null 2>&1
     ok "Live test data restarted (it first catches up on the time the lab was stopped)."
@@ -354,6 +367,72 @@ cmd_fleet() {
       ;;
     *)
       die "Unknown fleet command '$action'. See ./lab.sh help"
+      ;;
+  esac
+}
+
+agent_host_arg() {
+  # $1 = host name given by the user (default: first host). Prints it if valid.
+  # Called in $(...): the error goes to stderr so that it is shown.
+  local host="${1:-${AGENT_HOSTS%% *}}"
+  case " $AGENT_HOSTS " in
+    *" $host "*) echo "$host" ;;
+    *) fail "Unknown server '$host'. Available: $AGENT_HOSTS" >&2; exit 1 ;;
+  esac
+}
+
+cmd_agent() {
+  local action="${1:-status}" host
+  [ $# -gt 0 ] && shift
+  load_env
+  case "$action" in
+    shell)
+      host="$(agent_host_arg "${1:-}")"
+      lab_running || die "The lab is not running. Start it first: ./lab.sh start"
+      if ! docker image inspect easy-elk-lab/agent-host:local >/dev/null 2>&1; then
+        title "Building the server image (first time only)"
+        compose --profile agents build "$host"
+      fi
+      compose --profile agents up -d "$host" >/dev/null
+      title "Shell on $host as user 'student' (sudo allowed). Leave with: exit"
+      echo "  Paste the Linux commands from Kibana > Fleet > Add agent."
+      echo "  Fleet Server uses a self-signed certificate: add --insecure to the install command."
+      echo
+      compose exec -u student -w /home/student "$host" bash
+      ;;
+    status)
+      title "Servers"
+      # shellcheck disable=SC2086 # one argument per server
+      compose --profile agents ps -a $AGENT_HOSTS
+      for host in $AGENT_HOSTS; do
+        if [ -n "$(compose --profile agents ps -q --status running "$host" 2>/dev/null)" ]; then
+          title "Elastic Agent on $host"
+          compose exec -T "$host" sh -c \
+            'if [ -x /etc/init.d/elastic-agent ]; then elastic-agent status; else echo "Not installed."; fi' \
+            || true
+        fi
+      done
+      ;;
+    stop)
+      host="$(agent_host_arg "${1:-}")"
+      title "Stopping server $host (what is installed on it is kept)"
+      compose --profile agents stop "$host"
+      ;;
+    reset)
+      host="$(agent_host_arg "${1:-}")"
+      title "This deletes server $host and everything installed on it."
+      if [ "${2:-}" != "--yes" ]; then
+        printf "Type 'yes' to continue: "
+        local answer
+        read -r answer
+        [ "$answer" = "yes" ] || { echo "Aborted."; exit 1; }
+      fi
+      compose --profile agents rm -sf "$host"
+      ok "Server $host deleted. The next './lab.sh agent shell $host' gives a fresh one."
+      echo "  If its agent was enrolled, it now shows as offline in Fleet: unenroll it there."
+      ;;
+    *)
+      die "Unknown agent command '$action'. See ./lab.sh help"
       ;;
   esac
 }
@@ -564,6 +643,13 @@ Usage: ./lab.sh <command>
                        status            Fleet Server container and agent counts (default)
                        stop              stop Fleet Server (enrollment is kept)
                        logs              follow the Fleet Server logs
+  agent [action] [server]
+                     Bare Linux servers to install Elastic Agent on (servers: $AGENT_HOSTS):
+                       shell [server]    open a shell as 'student' (creates the server)
+                       status            servers and Elastic Agent status (default)
+                       stop [server]     stop a server (what is installed is kept)
+                       reset <server> [--yes]
+                                         delete a server, to start again from scratch
   check              Check prerequisites only
   init               Create .env with random passwords (never overwrites)
   destroy [--yes]    Remove the lab and ALL its data
@@ -585,6 +671,7 @@ case "$command" in
   es)             cmd_es "$@" ;;
   data)           cmd_data "$@" ;;
   fleet)          cmd_fleet "$@" ;;
+  agent)          cmd_agent "$@" ;;
   check)          cmd_check ;;
   init)           cmd_init ;;
   destroy)        cmd_destroy "$@" ;;

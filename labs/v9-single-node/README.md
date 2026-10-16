@@ -99,6 +99,35 @@ Agents running on the lab network enroll with `--url=https://fleet-server:8220
 --insecure`. Fleet Server uses a self-signed certificate, which is why `--insecure` is
 needed: in production, agents trust the certificate authority instead.
 
+## Install Elastic Agent on a server (optional)
+
+The lab provides a bare Linux server, `web-01` (Debian), on the lab network. You install
+Elastic Agent on it yourself, as on a real server:
+
+```bash
+./lab.sh fleet start          # Fleet Server must be running
+./lab.sh agent shell web-01   # shell as user 'student' (sudo allowed)
+```
+
+The first time, this builds a small image (about 20 seconds). Then, in Kibana:
+**Fleet > Add agent**, pick or create an agent policy, choose **Linux Tar**, and paste the
+commands into the shell. Add `--insecure` at the end of the `elastic-agent install`
+line (Fleet Server uses a self-signed certificate). The download is about 430 MB.
+
+- Apple Silicon Mac: replace `x86_64` with `arm64` in the commands.
+- Forgot `--insecure`? The agent is installed but cannot enroll. Remove it with
+  `sudo elastic-agent uninstall`, then run the install command again with `--insecure`.
+- There is no systemd in the container: the agent runs as an init.d service, which the
+  server starts and stops with the lab. Check it with `sudo elastic-agent status`.
+
+```bash
+./lab.sh agent status         # servers and Elastic Agent status
+./lab.sh agent stop web-01    # stop the server (what is installed is kept)
+./lab.sh agent reset web-01   # delete the server and start again from scratch
+```
+
+After `reset`, the old agent stays in Fleet as offline: unenroll it from Fleet.
+
 ## Commands
 
 | Command                            | What it does                                          |
@@ -113,6 +142,7 @@ needed: in production, agents trust the certificate authority instead.
 | `./lab.sh es <METHOD> <path> [body]` | Send an authenticated request to Elasticsearch      |
 | `./lab.sh data [status\|start\|stop\|logs\|backfill\|reset]` | Manage test data (see `./lab.sh help`) |
 | `./lab.sh fleet [start\|status\|stop\|logs]` | Fleet Server, started only on demand            |
+| `./lab.sh agent [shell\|status\|stop\|reset] [server]` | Bare servers to install Elastic Agent on |
 | `./lab.sh check`                   | Check prerequisites only                              |
 | `./lab.sh destroy`                 | Remove the lab and **all its data** (asks to confirm) |
 
