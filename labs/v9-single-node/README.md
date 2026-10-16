@@ -81,6 +81,24 @@ In Kibana, open **Discover** and select one of these data views.
 What the data contains, and all generator settings:
 [datagen/README.md](../../datagen/README.md).
 
+## Fleet Server (optional)
+
+Some labs of the Elastic Stack course use Elastic Agent managed by Fleet. Fleet Server
+is not started with the lab; start it when a lab asks for it (about 1 GB more memory):
+
+```bash
+./lab.sh fleet start     # prepares Fleet in Kibana, then starts Fleet Server
+./lab.sh fleet status    # Fleet Server container and number of agents
+./lab.sh fleet stop      # stop it (enrolled agents and settings are kept)
+```
+
+Then open **Kibana > Management > Fleet**: the Fleet Server appears in **Agents**.
+Once started, it restarts with the lab (`./lab.sh start`).
+
+Agents running on the lab network enroll with `--url=https://fleet-server:8220
+--insecure`. Fleet Server uses a self-signed certificate, which is why `--insecure` is
+needed: in production, agents trust the certificate authority instead.
+
 ## Commands
 
 | Command                            | What it does                                          |
@@ -91,9 +109,10 @@ What the data contains, and all generator settings:
 | `./lab.sh restart`                 | Stop then start                                       |
 | `./lab.sh status`                  | Show containers and cluster health                    |
 | `./lab.sh info`                    | Show URLs and credentials                             |
-| `./lab.sh logs [es01\|kibana]`     | Follow logs                                           |
+| `./lab.sh logs [es01\|kibana\|fleet-server]` | Follow logs                                |
 | `./lab.sh es <METHOD> <path> [body]` | Send an authenticated request to Elasticsearch      |
 | `./lab.sh data [status\|start\|stop\|logs\|backfill\|reset]` | Manage test data (see `./lab.sh help`) |
+| `./lab.sh fleet [start\|status\|stop\|logs]` | Fleet Server, started only on demand            |
 | `./lab.sh check`                   | Check prerequisites only                              |
 | `./lab.sh destroy`                 | Remove the lab and **all its data** (asks to confirm) |
 

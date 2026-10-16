@@ -68,6 +68,12 @@ has_test_data() {
 
 es_url() { echo "http://localhost:${ES_PORT:-9200}"; }
 
+kibana_url() { echo "http://localhost:${KIBANA_PORT:-5601}"; }
+
+fleet_created() {
+  [ -n "$(compose --profile fleet ps -aq fleet-server 2>/dev/null)" ]
+}
+
 # ---------------------------------------------------------------- commands
 
 cmd_init() {
@@ -175,6 +181,10 @@ cmd_start() {
   title "Starting the lab (Kibana can take a couple of minutes)"
   compose up -d --wait --wait-timeout 600 es01 setup kibana
   cmd_info
+  if fleet_created; then
+    compose --profile fleet up -d fleet-server >/dev/null 2>&1
+    ok "Fleet Server restarted."
+  fi
   if has_test_data; then
     compose --profile datagen up -d datagen >/dev/null 2>&1
     ok "Live test data restarted (it first catches up on the time the lab was stopped)."
@@ -247,6 +257,105 @@ es_query() {
   local args=(-s -u "elastic:${ELASTIC_PASSWORD}" -X "$1" -H "Content-Type: application/json")
   [ $# -ge 3 ] && args+=(-d "$3")
   curl "${args[@]}" "$(es_url)$2"
+}
+
+kb_query() {
+  # $1 = method, $2 = Kibana API path, $3 = optional JSON body. Prints the raw response
+  # followed by a last line with the HTTP status code.
+  local args=(-s -w '\n%{http_code}' -u "elastic:${ELASTIC_PASSWORD}" -X "$1"
+    -H "Content-Type: application/json" -H "kbn-xsrf: true")
+  [ $# -ge 3 ] && args+=(-d "$3")
+  curl "${args[@]}" "$(kibana_url)$2"
+}
+
+kb_call() {
+  # Like kb_query, but fails with the response when the status is not 2xx.
+  local out code
+  out="$(kb_query "$@")"
+  code="$(echo "$out" | tail -n 1)"
+  case "$code" in
+    2*) return 0 ;;
+  esac
+  fail "Kibana API $1 $2 returned HTTP $code:"
+  echo "$out" | sed '$d'
+  exit 1
+}
+
+kb_exists() {
+  # True when the Kibana API object at $1 exists.
+  [ "$(kb_query GET "$1" | tail -n 1)" = "200" ]
+}
+
+fleet_prepare() {
+  # Fleet settings the Fleet Server needs. Only creates what is missing.
+  kb_call POST /api/fleet/setup
+  ok "Fleet is set up in Kibana."
+  # Agents run in containers on the lab network: they reach Elasticsearch as es01.
+  kb_call PUT /api/fleet/outputs/fleet-default-output \
+    '{"name":"default","type":"elasticsearch","hosts":["http://es01:9200"]}'
+  ok "Default output: http://es01:9200"
+  if ! kb_exists /api/fleet/fleet_server_hosts/fleet-server-lab; then
+    kb_call POST /api/fleet/fleet_server_hosts \
+      '{"id":"fleet-server-lab","name":"Lab Fleet Server","host_urls":["https://fleet-server:8220"],"is_default":true}'
+  fi
+  ok "Fleet Server host: https://fleet-server:8220"
+  if ! kb_exists /api/fleet/agent_policies/fleet-server-policy; then
+    kb_call POST "/api/fleet/agent_policies?sys_monitoring=true" \
+      '{"id":"fleet-server-policy","name":"Fleet Server policy","namespace":"default","has_fleet_server":true,"monitoring_enabled":["logs","metrics"]}'
+  fi
+  ok "Agent policy: Fleet Server policy"
+}
+
+fleet_wait_online() {
+  # Waits until the Fleet Server agent shows as online in Fleet (max ~2 minutes).
+  local i
+  for ((i = 0; i < 40; i++)); do
+    case "$(kb_query GET "/api/fleet/agents?perPage=1&kuery=policy_id:fleet-server-policy%20and%20status:online")" in
+      *'"total":0'*) ;;
+      *'"total":'*) return 0 ;;
+    esac
+    sleep 3
+  done
+  return 1
+}
+
+cmd_fleet() {
+  local action="${1:-status}"
+  load_env
+  case "$action" in
+    start)
+      lab_running || die "The lab is not running. Start it first: ./lab.sh start"
+      title "Preparing Fleet"
+      fleet_prepare
+      title "Starting Fleet Server"
+      compose --profile fleet up -d --wait --wait-timeout 300 fleet-server
+      if fleet_wait_online; then
+        ok "Fleet Server is online: Kibana > Management > Fleet > Agents"
+      else
+        warn "Fleet Server is running but not online in Fleet yet. Check: ./lab.sh fleet logs"
+      fi
+      echo "  Agents on the lab network enroll with: --url=https://fleet-server:8220 --insecure"
+      ;;
+    stop)
+      title "Stopping Fleet Server (Fleet settings and enrollment are kept)"
+      compose --profile fleet stop fleet-server
+      ;;
+    status)
+      title "Fleet Server"
+      compose --profile fleet ps -a fleet-server
+      if fleet_created && lab_running; then
+        title "Agents in Fleet"
+        kb_query GET "/api/fleet/agent_status" | sed '$d'
+        echo
+      fi
+      ;;
+    logs)
+      compose --profile fleet logs -f --tail 50 fleet-server
+      ;;
+    *)
+      die "Unknown fleet command '$action'. See ./lab.sh help"
+      ;;
+  esac
 }
 
 draw_bar() {
@@ -437,7 +546,7 @@ Usage: ./lab.sh <command>
   restart            Stop then start
   status             Show containers and cluster health
   info               Show URLs and credentials
-  logs [service]     Follow logs (services: es01, kibana, setup)
+  logs [service]     Follow logs (services: es01, kibana, setup, fleet-server)
   es <METHOD> <path> [body]
                      Send an authenticated request to Elasticsearch, e.g.
                        ./lab.sh es GET /_cat/indices?v
@@ -450,6 +559,11 @@ Usage: ./lab.sh <command>
                        logs              follow the generator logs
                        backfill FROM TO  load a time range, e.g. now-7d now+3d
                        reset [--yes]     delete generated data and load it again
+  fleet [action]     Fleet Server (not started by default, about 1 GB more memory):
+                       start             prepare Fleet in Kibana, start Fleet Server
+                       status            Fleet Server container and agent counts (default)
+                       stop              stop Fleet Server (enrollment is kept)
+                       logs              follow the Fleet Server logs
   check              Check prerequisites only
   init               Create .env with random passwords (never overwrites)
   destroy [--yes]    Remove the lab and ALL its data
@@ -470,6 +584,7 @@ case "$command" in
   logs)           cmd_logs "$@" ;;
   es)             cmd_es "$@" ;;
   data)           cmd_data "$@" ;;
+  fleet)          cmd_fleet "$@" ;;
   check)          cmd_check ;;
   init)           cmd_init ;;
   destroy)        cmd_destroy "$@" ;;

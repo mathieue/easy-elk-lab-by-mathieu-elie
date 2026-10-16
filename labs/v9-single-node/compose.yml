@@ -116,6 +116,40 @@ services:
     mem_limit: 256m
     restart: on-failure
 
+  # Fleet Server: an Elastic Agent that also runs Fleet Server. Not started with the lab:
+  # `./lab.sh fleet start` prepares Fleet in Kibana (policy, host, output), then starts it.
+  fleet-server:
+    image: docker.elastic.co/elastic-agent/elastic-agent:${STACK_VERSION}
+    profiles: [fleet]
+    hostname: fleet-server
+    depends_on:
+      es01:
+        condition: service_healthy
+      kibana:
+        condition: service_healthy
+    environment:
+      - FLEET_SERVER_ENABLE=1
+      - FLEET_SERVER_ELASTICSEARCH_HOST=http://es01:9200
+      - FLEET_SERVER_POLICY_ID=fleet-server-policy
+      # Lab only: the elastic superuser creates the service and enrollment tokens.
+      - ELASTICSEARCH_USERNAME=elastic
+      - ELASTICSEARCH_PASSWORD=${ELASTIC_PASSWORD}
+      - KIBANA_HOST=http://kibana:5601
+      # No certificate given: Fleet Server uses a self-signed one (agents enroll with --insecure).
+      - STATE_PATH=/usr/share/elastic-agent/state
+    volumes:
+      - fleetserverdata:/usr/share/elastic-agent/state
+    mem_limit: ${FLEET_MEM_LIMIT:-1g}
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - curl -fsk https://localhost:8220/api/status | grep -q HEALTHY
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
 volumes:
   esdata01:
   kibanadata:
+  fleetserverdata:
