@@ -389,7 +389,7 @@ cmd_agent() {
     shell)
       host="$(agent_host_arg "${1:-}")"
       lab_running || die "The lab is not running. Start it first: ./lab.sh start"
-      if ! docker image inspect easy-elk-lab/agent-host:local >/dev/null 2>&1; then
+      if ! docker image inspect easy-elk-lab/agent-host:ubuntu-24.04 >/dev/null 2>&1; then
         title "Building the server image (first time only)"
         compose --profile agents build "$host"
       fi

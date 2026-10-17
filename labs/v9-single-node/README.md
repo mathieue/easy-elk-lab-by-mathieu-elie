@@ -101,7 +101,7 @@ needed: in production, agents trust the certificate authority instead.
 
 ## Install Elastic Agent on a server (optional)
 
-The lab provides a bare Linux server, `web-01` (Debian), on the lab network. You install
+The lab provides a bare Linux server, `web-01` (Ubuntu 24.04), on the lab network. You install
 Elastic Agent on it yourself, as on a real server:
 
 ```bash

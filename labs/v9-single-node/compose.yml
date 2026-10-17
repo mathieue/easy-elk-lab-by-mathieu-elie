@@ -152,7 +152,7 @@ services:
   # Bare Linux server where participants install Elastic Agent by hand:
   # `./lab.sh agent shell web-01`, then paste the commands from Kibana > Fleet > Add agent.
   web-01:
-    image: easy-elk-lab/agent-host:local
+    image: easy-elk-lab/agent-host:ubuntu-24.04
     build: ./agent-host
     profiles: [agents]
     hostname: web-01
