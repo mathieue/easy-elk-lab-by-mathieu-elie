@@ -101,12 +101,12 @@ needed: in production, agents trust the certificate authority instead.
 
 ## Install Elastic Agent on a server (optional)
 
-The lab provides a bare Linux server, `web-01` (Ubuntu 24.04), on the lab network. You install
+The lab provides a bare Linux server, `web-04` (Ubuntu 24.04), on the lab network. You install
 Elastic Agent on it yourself, as on a real server:
 
 ```bash
 ./lab.sh fleet start          # Fleet Server must be running
-./lab.sh agent shell web-01   # shell as user 'student' (sudo allowed)
+./lab.sh agent shell web-04   # shell as user 'student' (sudo allowed)
 ```
 
 The first time, this builds a small image (about 20 seconds). Then, in Kibana:
@@ -122,8 +122,8 @@ line (Fleet Server uses a self-signed certificate). The download is about 430 MB
 
 ```bash
 ./lab.sh agent status         # servers and Elastic Agent status
-./lab.sh agent stop web-01    # stop the server (what is installed is kept)
-./lab.sh agent reset web-01   # delete the server and start again from scratch
+./lab.sh agent stop web-04    # stop the server (what is installed is kept)
+./lab.sh agent reset web-04   # delete the server and start again from scratch
 ```
 
 After `reset`, the old agent stays in Fleet as offline: unenroll it from Fleet.

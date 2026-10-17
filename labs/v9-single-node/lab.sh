@@ -8,7 +8,7 @@ cd "$LAB_DIR"
 MIN_MAP_COUNT=262144
 MIN_FREE_MEM_MB=6144
 # Bare servers for Elastic Agent labs (Compose services of the "agents" profile)
-AGENT_HOSTS="web-01"
+AGENT_HOSTS="web-04"
 
 # ---------------------------------------------------------------- output
 
