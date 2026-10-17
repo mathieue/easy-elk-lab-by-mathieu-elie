@@ -1,2 +1,4 @@
 # Local lab settings (contain passwords)
 .env
+# Logstash pipeline edited by participants (created from pipeline.example)
+labs/*/logstash/pipeline/

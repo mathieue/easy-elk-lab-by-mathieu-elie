@@ -23,6 +23,9 @@ Commands:
                           (not in the company model, normal traffic only) to file P:
                           DATAGEN_FILE_HISTORY_HOURS of history, then live. Resumes
                           after the last line of P. No Elasticsearch needed.
+  syslog --target H:P     Send the live FortiGate logs of fw-02 (Lyon branch office
+                          firewall, normal traffic only) as syslog over UDP to H:P,
+                          DATAGEN_SYSLOG_RATE events/s on average. No history.
 """
 
 import argparse
@@ -41,6 +44,7 @@ from datetime import datetime, timezone
 
 from datasets import DATASETS
 from datasets.apache import ApacheServer
+from datasets.firewall import FirewallBranch
 
 BULK_SIZE = 5000
 BACKFILL_CHUNK_SECONDS = 600
@@ -428,6 +432,32 @@ def write_file(ds, path, history_hours, seed):
     log("stopped")
 
 
+def send_syslog(ds, target, seed):
+    """Live only: each event as one UDP datagram, "<189>" + the FortiGate line."""
+    import socket
+    host, _, port = target.rpartition(":")
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    second = int(time.time())
+    log(f"[{ds.name}] sending syslog to {target}")
+    sent, report = 0, second
+    while not stopping:
+        if second >= int(time.time()):
+            time.sleep(0.2)
+            continue
+        for _, doc in events_for_second(ds, second, seed):
+            try:
+                # <189> = facility local7, severity notice, as FortiGate sends it.
+                sock.sendto(("<189>" + doc["message"]).encode(), (host, int(port)))
+                sent += 1
+            except OSError as e:  # receiver not resolvable yet: keep going
+                log(f"cannot send to {target}: {e}")
+        second += 1
+        if second - report >= LIVE_REPORT_EVERY_SECONDS:
+            log(f"[{ds.name}] {sent} events sent")
+            report = second
+    log("stopped")
+
+
 def env(name, default=None):
     value = os.environ.get(name, "")
     return value if value != "" else default
@@ -448,7 +478,18 @@ def main():
     fl = sub.add_parser("file")
     fl.add_argument("--host", required=True)
     fl.add_argument("--path", required=True)
+    sl = sub.add_parser("syslog")
+    sl.add_argument("--target", required=True)
     args = parser.parse_args()
+
+    if args.command == "syslog":
+        signal.signal(signal.SIGTERM, on_signal)
+        signal.signal(signal.SIGINT, on_signal)
+        ds = FirewallBranch(seed=env("DATAGEN_SEED", "easy-elk-lab"),
+                            utc_offset_hours=float(env("DATAGEN_UTC_OFFSET", "1")),
+                            rate=float(env("DATAGEN_SYSLOG_RATE", "1")))
+        send_syslog(ds, args.target, env("DATAGEN_SEED", "easy-elk-lab"))
+        return
 
     if args.command == "file":
         signal.signal(signal.SIGTERM, on_signal)

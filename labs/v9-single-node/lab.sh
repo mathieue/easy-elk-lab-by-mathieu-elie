@@ -76,6 +76,10 @@ fleet_created() {
   [ -n "$(compose --profile fleet ps -aq fleet-server 2>/dev/null)" ]
 }
 
+logstash_created() {
+  [ -n "$(compose --profile logstash ps -aq logstash 2>/dev/null)" ]
+}
+
 agent_host_created() {
   [ -n "$(compose --profile agents ps -aq "$1" 2>/dev/null)" ]
 }
@@ -190,6 +194,10 @@ cmd_start() {
   if fleet_created; then
     compose --profile fleet up -d fleet-server >/dev/null 2>&1
     ok "Fleet Server restarted."
+  fi
+  if logstash_created; then
+    compose --profile logstash up -d logstash fw-02 >/dev/null 2>&1
+    ok "Logstash and fw-02 restarted."
   fi
   local host
   for host in $AGENT_HOSTS; do
@@ -437,6 +445,54 @@ cmd_agent() {
   esac
 }
 
+cmd_logstash() {
+  local action="${1:-status}"
+  load_env
+  case "$action" in
+    start)
+      lab_running || die "The lab is not running. Start it first: ./lab.sh start"
+      if [ ! -d logstash/pipeline ]; then
+        cp -R logstash/pipeline.example logstash/pipeline
+        ok "Created logstash/pipeline/ (your pipeline: logstash/pipeline/fw-02.conf)."
+      fi
+      title "Starting Logstash and fw-02 (Logstash takes about a minute)"
+      compose --profile logstash up -d --wait --wait-timeout 300 logstash fw-02
+      ok "Logstash is running. Edit logstash/pipeline/fw-02.conf: it reloads on save."
+      echo "  See the events: ./lab.sh logstash logs"
+      ;;
+    stop)
+      title "Stopping Logstash and fw-02 (your pipeline is kept)"
+      compose --profile logstash stop logstash fw-02
+      ;;
+    status)
+      title "Logstash"
+      compose --profile logstash ps -a logstash fw-02
+      if [ -n "$(compose --profile logstash ps -q --status running logstash 2>/dev/null)" ]; then
+        title "Events (in = received, out = sent by the outputs)"
+        compose exec -T logstash curl -s "http://localhost:9600/_node/stats/events?pretty" | sed -n '/"events"/,/}/p'
+      fi
+      ;;
+    logs)
+      compose --profile logstash logs -f --tail 50 logstash
+      ;;
+    reset)
+      title "This replaces logstash/pipeline/ with the example pipeline."
+      if [ "${2:-}" != "--yes" ]; then
+        printf "Type 'yes' to continue: "
+        local answer
+        read -r answer
+        [ "$answer" = "yes" ] || { echo "Aborted."; exit 1; }
+      fi
+      rm -rf logstash/pipeline
+      cp -R logstash/pipeline.example logstash/pipeline
+      ok "Pipeline reset to logstash/pipeline.example/ (Logstash reloads it)."
+      ;;
+    *)
+      die "Unknown logstash command '$action'. See ./lab.sh help"
+      ;;
+  esac
+}
+
 draw_bar() {
   # $1 = dataset, $2 = percent, $3 = docs. Uses width/full/empty from render_progress.
   local filled=$(( $2 * width / 100 )) bar="" j
@@ -643,6 +699,12 @@ Usage: ./lab.sh <command>
                        status            Fleet Server container and agent counts (default)
                        stop              stop Fleet Server (enrollment is kept)
                        logs              follow the Fleet Server logs
+  logstash [action]  Logstash + fw-02 (firewall sending syslog), not started by default:
+                       start             create logstash/pipeline/ if needed, start them
+                       status            containers and event counters (default)
+                       logs              follow Logstash (the stdout output shows here)
+                       stop              stop them (your pipeline is kept)
+                       reset [--yes]     replace your pipeline with the example
   agent [action] [server]
                      Bare Linux servers to install Elastic Agent on (servers: $AGENT_HOSTS):
                        shell [server]    open a shell as 'student' (creates the server)
@@ -672,6 +734,7 @@ case "$command" in
   data)           cmd_data "$@" ;;
   fleet)          cmd_fleet "$@" ;;
   agent)          cmd_agent "$@" ;;
+  logstash)       cmd_logstash "$@" ;;
   check)          cmd_check ;;
   init)           cmd_init ;;
   destroy)        cmd_destroy "$@" ;;

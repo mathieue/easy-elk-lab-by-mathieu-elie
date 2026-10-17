@@ -131,6 +131,28 @@ line (Fleet Server uses a self-signed certificate). The download is about 430 MB
 
 After `reset`, the old agent stays in Fleet as offline: unenroll it from Fleet.
 
+## Logstash (optional)
+
+For the Logstash labs. `fw-02`, the firewall of the shop's Lyon branch office, sends its
+FortiGate logs as syslog (UDP) to Logstash on port 5514. Neither is started with the lab
+(about 1 GB more memory):
+
+```bash
+./lab.sh logstash start     # first time: downloads the Logstash image, about a minute
+./lab.sh logstash logs      # follow Logstash: the stdout output prints the events here
+./lab.sh logstash status    # containers and event counters
+./lab.sh logstash stop      # stop them (your pipeline is kept)
+./lab.sh logstash reset     # replace your pipeline with the example one
+```
+
+Your pipeline is the file `logstash/pipeline/fw-02.conf` (created from
+`logstash/pipeline.example/` at the first start, not tracked by git). Edit it with any
+editor and save: Logstash reloads it by itself after a few seconds. A mistake in the
+file shows up in `./lab.sh logstash logs`, and Logstash keeps the last working pipeline.
+
+For an `elasticsearch` output: `hosts => ["http://es01:9200"]`, `user => "elastic"`,
+`password => "${ELASTIC_PASSWORD}"` (Logstash reads the password from its environment).
+
 ## Commands
 
 | Command                            | What it does                                          |
@@ -146,6 +168,7 @@ After `reset`, the old agent stays in Fleet as offline: unenroll it from Fleet.
 | `./lab.sh data [status\|start\|stop\|logs\|backfill\|reset]` | Manage test data (see `./lab.sh help`) |
 | `./lab.sh fleet [start\|status\|stop\|logs]` | Fleet Server, started only on demand            |
 | `./lab.sh agent [shell\|status\|stop\|reset] [server]` | Bare servers to install Elastic Agent on |
+| `./lab.sh logstash [start\|status\|logs\|stop\|reset]` | Logstash and the fw-02 syslog sender      |
 | `./lab.sh check`                   | Check prerequisites only                              |
 | `./lab.sh destroy`                 | Remove the lab and **all its data** (asks to confirm) |
 

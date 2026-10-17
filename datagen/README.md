@@ -34,6 +34,14 @@ visitors and daily rhythm as the `apache` dataset, but its own requests (never t
 same as on web-01..03), normal traffic only (no incidents). It resumes after the last
 line of the file, so a restart never duplicates lines.
 
+For the Logstash labs (`./lab.sh logstash start`), the `fw-02` service runs
+`datagen.py syslog --target logstash:5514`: live FortiGate traffic logs of `fw-02`,
+firewall of the shop's Lyon branch office (about 25 employees: Internet browsing,
+access to the head office servers through a VPN tunnel, Internet noise on its public IP
+`198.51.100.20`), sent as syslog over UDP (`<189>` + the FortiGate line),
+`DATAGEN_SYSLOG_RATE` (1) events per second on average, more during office hours. Its
+own sessions (never the same as `fw-01`'s), normal traffic only, no history.
+
 ## Datasets
 
 ### `apache` — web server access logs

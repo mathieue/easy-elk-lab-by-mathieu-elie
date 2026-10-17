@@ -135,6 +135,9 @@ class Firewall:
         self.seed = seed
         self.base_rate = rate
         self.utc_offset = int(utc_offset_hours * 3600)
+        # Identity of the firewall (FirewallBranch changes it).
+        self.fw_name, self.fw_serial, self.wan_ip = FW_NAME, FW_SERIAL, WAN_IP
+        self.interface_roles = INTERFACE_ROLES
         # Same visitors, same daily pattern and same web scanner as the apache dataset.
         self.apache = Apache(seed=seed, utc_offset_hours=utc_offset_hours, rate=rate)
         rng = random.Random(f"{seed}:{self.name}:reference")
@@ -395,14 +398,14 @@ class Firewall:
 
     def session_noise(self, rng, ts):
         port = self.noise_ports.pick(rng)
-        return self.session(rng, ts, src=self.scanners.pick(rng), dst={"ip": WAN_IP}, dst_port=port,
+        return self.session(rng, ts, src=self.scanners.pick(rng), dst={"ip": self.wan_ip}, dst_port=port,
                             in_if="wan1", out_if="root", policy=POLICY_IMPLICIT_DENY, direction="inbound",
                             denied=True)
 
     def session_portscan(self, rng, ts):
         scan = self.active("portscan", int(ts))
         port = rng.randint(1, 1024) if rng.random() < 0.7 else self.noise_ports.pick(rng)
-        return self.session(rng, ts, src=scan["source"], dst={"ip": WAN_IP}, dst_port=port,
+        return self.session(rng, ts, src=scan["source"], dst={"ip": self.wan_ip}, dst_port=port,
                             in_if="wan1", out_if="root", policy=POLICY_IMPLICIT_DENY, direction="inbound",
                             denied=True)
 
@@ -451,15 +454,15 @@ class Firewall:
         fields = [
             ("date", time.strftime("%Y-%m-%d", time.gmtime(ts))),
             ("time", time.strftime("%H:%M:%S", time.gmtime(ts))),
-            ("devname", f'"{FW_NAME}"'), ("devid", f'"{FW_SERIAL}"'),
+            ("devname", f'"{self.fw_name}"'), ("devid", f'"{self.fw_serial}"'),
             ("eventtime", int(ts * 1_000_000_000)), ("tz", '"+0000"'),
             ("logid", '"0001000014"' if local else '"0000000013"'),
             ("type", '"traffic"'), ("subtype", '"local"' if local else '"forward"'),
             ("level", '"warning"' if denied else '"notice"'), ("vd", '"root"'),
             ("srcip", src["ip"]), ("srcport", src_port),
-            ("srcintf", f'"{in_if}"'), ("srcintfrole", f'"{INTERFACE_ROLES[in_if]}"'),
+            ("srcintf", f'"{in_if}"'), ("srcintfrole", f'"{self.interface_roles[in_if]}"'),
             ("dstip", dst["ip"]), ("dstport", dst_port),
-            ("dstintf", f'"{out_if}"'), ("dstintfrole", f'"{INTERFACE_ROLES[out_if]}"'),
+            ("dstintf", f'"{out_if}"'), ("dstintfrole", f'"{self.interface_roles[out_if]}"'),
             ("srccountry", f'"{src["geo"]["country_name"] if "geo" in src else "Reserved"}"'),
             ("dstcountry", f'"{dst["geo"]["country_name"] if "geo" in dst else "Reserved"}"'),
             ("sessionid", session_id), ("proto", PROTO_NUMBERS[transport]), ("action", f'"{action}"'),
@@ -469,7 +472,7 @@ class Firewall:
             fields.append(("user", f'"{user}"'))
         fields.append(("service", f'"{service}"'))
         if nat:
-            fields += [("trandisp", '"snat"'), ("transip", WAN_IP), ("transport", nat_port)]
+            fields += [("trandisp", '"snat"'), ("transip", self.wan_ip), ("transport", nat_port)]
         else:
             fields.append(("trandisp", '"noop"'))
         fields += [("duration", duration), ("sentbyte", sent), ("rcvdbyte", rcvd), ("sentpkt", sent_pkt)]
@@ -482,7 +485,7 @@ class Firewall:
         if "geo" in src:
             source["geo"] = src["geo"]
         if nat:
-            source["nat"] = {"ip": WAN_IP, "port": nat_port}
+            source["nat"] = {"ip": self.wan_ip, "port": nat_port}
         destination = {"ip": dst["ip"], "port": dst_port, "bytes": rcvd, "packets": rcvd_pkt}
         if "geo" in dst:
             destination["geo"] = dst["geo"]
@@ -507,8 +510,8 @@ class Firewall:
                 "duration": duration * 1_000_000_000,
             },
             "observer": {
-                "name": FW_NAME, "vendor": "Fortinet", "product": "FortiGate", "type": "firewall",
-                "serial_number": FW_SERIAL,
+                "name": self.fw_name, "vendor": "Fortinet", "product": "FortiGate", "type": "firewall",
+                "serial_number": self.fw_serial,
                 "ingress": {"interface": {"name": in_if}},
                 "egress": {"interface": {"name": out_if}},
             },
@@ -521,3 +524,45 @@ class Firewall:
             doc["user"] = {"name": user}
             doc["source"]["user"] = {"name": user}
         return doc
+
+
+class FirewallBranch(Firewall):
+    """fw-02, firewall of the Lyon branch office (not in company.SERVERS, no incidents).
+
+    About 25 employees: Internet browsing, access to the head office servers through an
+    IPsec tunnel (interface "to-hq"), Internet noise on its public IP. Its own name in the
+    rng keys, so its sessions never duplicate those of fw-01. Used by `datagen.py syslog`.
+    """
+
+    name = "firewall-fw-02"
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.fw_name, self.fw_serial, self.wan_ip = "fw-02", "FG60FTK24001388", "198.51.100.20"
+        self.interface_roles = {**INTERFACE_ROLES, "to-hq": "wan"}
+        rng = random.Random(f"{self.seed}:{self.name}:office")
+        hosts = rng.sample(range(10, 251), 25)
+        self.workstations = [
+            {"ip": f"10.20.20.{h}", "user": f"{rng.choice(FIRST_NAMES)}.{rng.choice(LAST_NAMES)}"} for h in hosts
+        ]
+        self.workstation_pick = Weighted(self.workstations, [rng.uniform(0.3, 2.0) for _ in hosts])
+
+    def mix(self, second):
+        local = second + self.utc_offset
+        office = self.office_hours((local % 86400) / 3600, (local // 86400 + 3) % 7)
+        return {"outbound": 0.55 * office, "internal": 0.25 * office, "noise": 0.20}
+
+    def rates(self, second):
+        return {kind: self.base_rate * value / self.mean for kind, value in self.mix(second).items()}
+
+    def active(self, kind, second):
+        return None
+
+    def session_internal(self, rng, ts):
+        ws = self.workstation_pick.pick(rng)
+        ip, port = self.internal.pick(rng)
+        big = port == 445
+        return self.session(rng, ts, src=ws, dst={"ip": ip}, dst_port=port, in_if="lan", out_if="to-hq",
+                            policy=(7, "Lyon-to-HQ"), direction="outbound",
+                            sent=rng.lognormvariate(9 if big else 7, 1.5), rcvd=rng.lognormvariate(12 if big else 8, 2),
+                            duration=rng.lognormvariate(2 if big else 0.5, 1.2))

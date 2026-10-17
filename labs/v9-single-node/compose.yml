@@ -169,6 +169,51 @@ services:
       - ../../datagen:/opt/datagen:ro
     mem_limit: ${AGENT_MEM_LIMIT:-1g}
 
+  # Logstash: not started with the lab. `./lab.sh logstash start` creates
+  # logstash/pipeline/ from logstash/pipeline.example/, then starts it with fw-02.
+  logstash:
+    image: docker.elastic.co/logstash/logstash:${STACK_VERSION}
+    profiles: [logstash]
+    hostname: logstash
+    depends_on:
+      es01:
+        condition: service_healthy
+    environment:
+      - LS_JAVA_OPTS=-Xms${LOGSTASH_HEAP:-512m} -Xmx${LOGSTASH_HEAP:-512m}
+      # Reload the pipeline when its file changes.
+      - CONFIG_RELOAD_AUTOMATIC=true
+      - XPACK_MONITORING_ENABLED=false
+      # For the elasticsearch output: password => "${ELASTIC_PASSWORD}"
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
+    volumes:
+      - ./logstash/pipeline:/usr/share/logstash/pipeline
+    mem_limit: ${LOGSTASH_MEM_LIMIT:-1g}
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - curl -fs http://localhost:9600 >/dev/null
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  # fw-02, firewall of the Lyon branch office: the lab data generator sends its
+  # FortiGate logs as syslog (UDP) to logstash:5514. Started with Logstash.
+  fw-02:
+    image: python:3.14.8-slim-trixie
+    profiles: [logstash]
+    hostname: fw-02
+    environment:
+      - DATAGEN_SEED=${DATAGEN_SEED:-easy-elk-lab}
+      - DATAGEN_UTC_OFFSET=${DATAGEN_UTC_OFFSET:-1}
+      - DATAGEN_SYSLOG_RATE=${DATAGEN_SYSLOG_RATE:-1}
+      - PYTHONDONTWRITEBYTECODE=1
+    volumes:
+      - ../../datagen:/app:ro
+    command: [python, -u, /app/datagen.py, syslog, --target, "logstash:5514"]
+    mem_limit: 128m
+    restart: on-failure
+
 volumes:
   esdata01:
   kibanadata:
