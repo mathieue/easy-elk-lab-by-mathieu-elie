@@ -119,6 +119,9 @@ line (Fleet Server uses a self-signed certificate). The download is about 430 MB
   `sudo elastic-agent uninstall`, then run the install command again with `--insecure`.
 - There is no systemd in the container: the agent runs as an init.d service, which the
   server starts and stops with the lab. Check it with `sudo elastic-agent status`.
+- `web-04` is a new web server of the shop: its Apache access log
+  `/var/log/apache2/access.log` fills up on its own (the last 24 hours, then live), so
+  there are real log lines to collect. `tail -f /var/log/apache2/access.log` to watch it.
 
 ```bash
 ./lab.sh agent status         # servers and Elastic Agent status

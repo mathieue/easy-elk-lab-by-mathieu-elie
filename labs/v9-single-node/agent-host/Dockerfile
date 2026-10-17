@@ -2,12 +2,13 @@
 # by hand (the Linux commands shown in Kibana > Fleet > Add agent).
 # Ubuntu, not Debian 12/13: on those, the System integration reads logs from journald
 # only, and a container has no journal. On Ubuntu it reads /var/log/auth.log and syslog.
+# python3 runs the lab data generator, which writes the web server access log.
 # After changing this file, change the image tag in compose.yml and lab.sh.
 FROM ubuntu:noble-20260911
 
 RUN apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      ca-certificates curl procps sudo \
+      ca-certificates curl procps python3 sudo \
  && rm -rf /var/lib/apt/lists/* \
  && useradd --create-home --shell /bin/bash student \
  && echo "student ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/student \

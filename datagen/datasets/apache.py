@@ -449,3 +449,20 @@ class Apache:
         if user:
             doc["user"] = {"name": user}
         return doc
+
+
+class ApacheServer(Apache):
+    """Normal traffic of one web server that is not in company.SERVERS (no incidents).
+
+    Same shop, visitors and daily shape as `Apache` (same reference draws), but its own
+    name in the per-second rng key: its requests never duplicate those of web-01..03.
+    Used by `datagen.py file` to write a real access log on an agent server.
+    """
+
+    def __init__(self, host, **kwargs):
+        super().__init__(**kwargs)
+        self.name = f"apache-{host}"
+        self.hosts = Weighted([host], [1])
+
+    def active(self, kind, second):
+        return None

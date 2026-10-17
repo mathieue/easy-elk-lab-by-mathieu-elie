@@ -19,6 +19,10 @@ Commands:
   backfill FROM TO        Load a fixed time range, then exit.
                           FROM/TO: ISO date, "now", "now-30d", "now+2h", ...
   setup                   Install index templates and Kibana data views only.
+  file --host H --path P  Write the raw Apache access log of an extra web server H
+                          (not in the company model, normal traffic only) to file P:
+                          DATAGEN_FILE_HISTORY_HOURS of history, then live. Resumes
+                          after the last line of P. No Elasticsearch needed.
 """
 
 import argparse
@@ -36,6 +40,7 @@ import urllib.request
 from datetime import datetime, timezone
 
 from datasets import DATASETS
+from datasets.apache import ApacheServer
 
 BULK_SIZE = 5000
 BACKFILL_CHUNK_SECONDS = 600
@@ -386,6 +391,43 @@ def parse_time(value):
     return int(parsed.timestamp())
 
 
+def last_line_second(path):
+    """Epoch second of the last Apache line of a file, None if empty or missing."""
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - 4096))
+            lines = f.read().decode("utf-8", "replace").splitlines()
+    except FileNotFoundError:
+        return None
+    for line in reversed(lines):
+        match = re.search(r"\[(\d+/\w+/\d+:\d+:\d+:\d+) \+0000\]", line)
+        if match:
+            return int(datetime.strptime(match.group(1), "%d/%b/%Y:%H:%M:%S")
+                       .replace(tzinfo=timezone.utc).timestamp())
+    return None
+
+
+def write_file(ds, path, history_hours, seed):
+    """History, then live, one line per event. Resumes after the last line: no duplicates."""
+    now = int(time.time())
+    second = now - int(history_hours * 3600)
+    last = last_line_second(path)
+    if last is not None:
+        second = max(second, last + 1)
+    log(f"[{ds.name}] writing {path} from {fmt(second)} UTC, then live")
+    with open(path, "a", encoding="utf-8") as f:
+        while not stopping:
+            if second >= int(time.time()):
+                f.flush()
+                time.sleep(0.5)
+                continue
+            for _, doc in events_for_second(ds, second, seed):
+                f.write(doc["message"] + "\n")
+            second += 1
+    log("stopped")
+
+
 def env(name, default=None):
     value = os.environ.get(name, "")
     return value if value != "" else default
@@ -403,7 +445,19 @@ def main():
     bf = sub.add_parser("backfill")
     bf.add_argument("start")
     bf.add_argument("end")
+    fl = sub.add_parser("file")
+    fl.add_argument("--host", required=True)
+    fl.add_argument("--path", required=True)
     args = parser.parse_args()
+
+    if args.command == "file":
+        signal.signal(signal.SIGTERM, on_signal)
+        signal.signal(signal.SIGINT, on_signal)
+        ds = ApacheServer(args.host, seed=env("DATAGEN_SEED", "easy-elk-lab"),
+                          utc_offset_hours=float(env("DATAGEN_UTC_OFFSET", "1")),
+                          rate=float(env("DATAGEN_RATE", "0.1")))
+        write_file(ds, args.path, float(env("DATAGEN_FILE_HISTORY_HOURS", "24")), env("DATAGEN_SEED", "easy-elk-lab"))
+        return
 
     names = [n.strip() for n in env("DATAGEN_DATASETS", "apache,firewall,metrics,postgresql").split(",") if n.strip()]
     unknown = [n for n in names if n not in DATASETS]

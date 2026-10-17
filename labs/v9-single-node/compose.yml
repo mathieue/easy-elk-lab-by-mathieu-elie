@@ -152,12 +152,21 @@ services:
   # Bare Linux server where participants install Elastic Agent by hand:
   # `./lab.sh agent shell web-04`, then paste the commands from Kibana > Fleet > Add agent.
   web-04:
-    image: easy-elk-lab/agent-host:ubuntu-24.04
+    image: easy-elk-lab/agent-host:ubuntu-24.04-v2
     build: ./agent-host
     profiles: [agents]
     hostname: web-04
     # tini as PID 1: reaps stopped agent processes, so `elastic-agent uninstall` works.
     init: true
+    # The lab data generator writes this server's Apache log: /var/log/apache2/access.log
+    environment:
+      - DATAGEN_SEED=${DATAGEN_SEED:-easy-elk-lab}
+      - DATAGEN_RATE=${DATAGEN_RATE:-0.1}
+      - DATAGEN_UTC_OFFSET=${DATAGEN_UTC_OFFSET:-1}
+      - DATAGEN_FILE_HISTORY_HOURS=${DATAGEN_FILE_HISTORY_HOURS:-24}
+      - PYTHONDONTWRITEBYTECODE=1
+    volumes:
+      - ../../datagen:/opt/datagen:ro
     mem_limit: ${AGENT_MEM_LIMIT:-1g}
 
 volumes:

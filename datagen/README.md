@@ -25,6 +25,15 @@ Nothing is loaded when a lab starts. Use it through the lab script:
 ./lab.sh data reset                   # delete generated data and load it again
 ```
 
+The generator also writes **raw log files** on the agent servers of the lab
+(`./lab.sh agent shell web-04`): `web-04` is an extra web server of the shop, and its
+Apache access log `/var/log/apache2/access.log` gets the last
+`DATAGEN_FILE_HISTORY_HOURS` (24) hours, then live lines (command
+`datagen.py file --host web-04 --path ...`, started by the server itself). Same
+visitors and daily rhythm as the `apache` dataset, but its own requests (never the
+same as on web-01..03), normal traffic only (no incidents). It resumes after the last
+line of the file, so a restart never duplicates lines.
+
 ## Datasets
 
 ### `apache` — web server access logs
