@@ -20,7 +20,7 @@ live).
 
 `./lab.sh check` verifies all of this for you.
 
-On a fresh Ubuntu 24.04 machine, everything above can be set up in one go, from the
+On a fresh Ubuntu 24.04 or 26.04 machine, everything above can be set up in one go, from the
 root of the repository (it explains and asks before each step; `--yes` skips the
 questions, `--help` lists them):
 

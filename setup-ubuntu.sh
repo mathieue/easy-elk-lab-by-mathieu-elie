@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Prepare a fresh Ubuntu 24.04 machine for the labs: Docker Engine, the docker compose
+# Prepare a fresh Ubuntu 24.04 or 26.04 machine for the labs: Docker Engine, the docker compose
 # plugin, docker group, vm.max_map_count, and the lab images pulled in advance.
 # Run it once as root: sudo ./setup-ubuntu.sh   (help: ./setup-ubuntu.sh --help)
 set -euo pipefail
@@ -13,6 +13,11 @@ SYSCTL_FILE=/etc/sysctl.d/99-easy-elk-lab.conf
 BASE_PACKAGES="ca-certificates curl git"
 CONFLICTING_PACKAGES="docker.io docker-doc docker-compose docker-compose-v2 podman-docker containerd runc"
 DOCKER_PACKAGES="docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin"
+DOCKER_REPO_URL=https://download.docker.com/linux/ubuntu
+DOCKER_SOURCES=/etc/apt/sources.list.d/docker.sources
+SUPPORTED_VERSIONS="24.04 26.04"
+# Docker packages used when Docker does not publish any for this Ubuntu release yet.
+FALLBACK_SUITE=noble
 
 ASSUME_YES=0
 PULL_IMAGES=1
@@ -55,11 +60,14 @@ confirm() {
 
 installed() { dpkg-query -W -f='${Status}' "$1" 2>/dev/null | grep -q 'install ok installed'; }
 
+# True when the Docker repository publishes packages for this Ubuntu codename.
+docker_has_suite() { curl -fsS -o /dev/null "$DOCKER_REPO_URL/dists/$1/Release" 2>/dev/null; }
+
 usage() {
   cat <<EOF
 Usage: sudo ./setup-ubuntu.sh [options]
 
-Prepares a fresh Ubuntu 24.04 machine for the labs. Each step explains what it does
+Prepares a fresh Ubuntu 24.04 or 26.04 machine for the labs. Each step explains what it does
 and asks before changing anything. Steps already done are skipped, so the script can
 be run again safely.
 
@@ -94,11 +102,10 @@ check_machine() {
   # shellcheck disable=SC1091
   . /etc/os-release
   [ "${ID:-}" = "ubuntu" ] || die "This script is for Ubuntu (found: ${PRETTY_NAME:-unknown})."
-  if [ "${VERSION_ID:-}" = "24.04" ]; then
-    ok "$PRETTY_NAME"
-  else
-    warn "$PRETTY_NAME: only Ubuntu 24.04 is tested. Continuing."
-  fi
+  case " $SUPPORTED_VERSIONS " in
+    *" ${VERSION_ID:-} "*) ok "$PRETTY_NAME" ;;
+    *) warn "$PRETTY_NAME: only Ubuntu $SUPPORTED_VERSIONS are supported. Continuing." ;;
+  esac
 
   [ "$(dpkg --print-architecture)" = "amd64" ] || [ "$(dpkg --print-architecture)" = "arm64" ] \
     || die "Unsupported architecture: $(dpkg --print-architecture) (amd64 or arm64 needed)."
@@ -162,23 +169,43 @@ step_remove_conflicts() {
 
 step_docker_repo() {
   title "3. Docker apt repository"
-  if [ -f /etc/apt/sources.list.d/docker.sources ] && [ -f /etc/apt/keyrings/docker.asc ]; then
-    ok "Already configured: /etc/apt/sources.list.d/docker.sources"
+  if ! command -v curl >/dev/null 2>&1; then
+    warn "curl is not installed (step 1): cannot add the repository."
+    SKIPPED="$SKIPPED\n  - Docker repository"
     return
   fi
-  info "Adds the official Docker repository (https://download.docker.com/linux/ubuntu)"
-  info "and its signing key, as documented on https://docs.docker.com/engine/install/ubuntu/"
-  confirm "Add the Docker repository?" "Docker repository" || return 0
   # shellcheck disable=SC1091
   . /etc/os-release
+  local suite="${UBUNTU_CODENAME:-$VERSION_CODENAME}" configured=""
+  # A new Ubuntu release can come out before Docker publishes packages for it:
+  # the packages of the previous LTS then work on it.
+  if ! docker_has_suite "$suite"; then
+    warn "No Docker packages for Ubuntu $suite on $DOCKER_REPO_URL (yet, or no network)."
+    info "Using the Ubuntu $FALLBACK_SUITE packages instead; run this script again later"
+    info "to switch to $suite packages once Docker publishes them."
+    suite="$FALLBACK_SUITE"
+  fi
+  if [ -f "$DOCKER_SOURCES" ]; then
+    configured="$(awk '$1 == "Suites:" {print $2}' "$DOCKER_SOURCES")"
+  fi
+  if [ "$configured" = "$suite" ] && [ -f /etc/apt/keyrings/docker.asc ]; then
+    ok "Already configured: $DOCKER_SOURCES ($suite)"
+    return
+  fi
+  if [ -n "$configured" ]; then
+    info "$DOCKER_SOURCES uses '$configured' packages: switches it to '$suite'."
+  fi
+  info "Adds the official Docker repository ($DOCKER_REPO_URL, $suite packages)"
+  info "and its signing key, as documented on https://docs.docker.com/engine/install/ubuntu/"
+  confirm "Add the Docker repository?" "Docker repository" || return 0
   run install -m 0755 -d /etc/apt/keyrings
-  run curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+  run curl -fsSL "$DOCKER_REPO_URL/gpg" -o /etc/apt/keyrings/docker.asc
   run chmod a+r /etc/apt/keyrings/docker.asc
-  echo "       \$ write /etc/apt/sources.list.d/docker.sources"
-  cat >/etc/apt/sources.list.d/docker.sources <<EOF
+  echo "       \$ write $DOCKER_SOURCES"
+  cat >"$DOCKER_SOURCES" <<EOF
 Types: deb
-URIs: https://download.docker.com/linux/ubuntu
-Suites: ${UBUNTU_CODENAME:-$VERSION_CODENAME}
+URIs: $DOCKER_REPO_URL
+Suites: $suite
 Components: stable
 Signed-By: /etc/apt/keyrings/docker.asc
 EOF
@@ -196,7 +223,7 @@ step_docker_install() {
     ok "Already installed: $(docker --version)"
     return
   fi
-  [ -f /etc/apt/sources.list.d/docker.sources ] \
+  [ -f "$DOCKER_SOURCES" ] \
     || { warn "The Docker repository is not configured (step 3): cannot install."; SKIPPED="$SKIPPED\n  - Docker Engine"; return 0; }
   info "Installs:$missing"
   confirm "Install Docker Engine?" "Docker Engine" || return 0
@@ -242,17 +269,19 @@ step_docker_group() {
 
 step_max_map_count() {
   title "7. vm.max_map_count"
-  local current
+  local current target="$MIN_MAP_COUNT"
   current="$(cat /proc/sys/vm/max_map_count)"
   if [ "$current" -ge "$MIN_MAP_COUNT" ] && grep -qs "vm.max_map_count" "$SYSCTL_FILE"; then
     ok "vm.max_map_count = $current, kept at boot by $SYSCTL_FILE"
     return
   fi
+  # Some releases already set a higher default: keep it rather than lower it.
+  [ "$current" -le "$MIN_MAP_COUNT" ] || target="$current"
   info "Current value: $current. Elasticsearch needs at least $MIN_MAP_COUNT."
   info "Writes $SYSCTL_FILE (kept at boot) and applies it now."
-  confirm "Set vm.max_map_count=$MIN_MAP_COUNT?" "vm.max_map_count" || return 0
+  confirm "Set vm.max_map_count=$target?" "vm.max_map_count" || return 0
   echo "       \$ write $SYSCTL_FILE"
-  printf '# Elasticsearch (easy-elk-lab)\nvm.max_map_count = %s\n' "$MIN_MAP_COUNT" >"$SYSCTL_FILE"
+  printf '# Elasticsearch (easy-elk-lab)\nvm.max_map_count = %s\n' "$target" >"$SYSCTL_FILE"
   run sysctl -p "$SYSCTL_FILE"
   ok "vm.max_map_count = $(cat /proc/sys/vm/max_map_count)"
 }
